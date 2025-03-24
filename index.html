@@ -6,17 +6,44 @@
     <title>Detecção de Cores</title>
   </head>
   <body>
-    <input type="file" id="imageInput" accept="image/*" />
-    <input type="color" id="colorPicker" value="#0000ff" />
-    <canvas id="outputCanvas"></canvas>
+    <input type="file" id="imageInput" accept="images/*" />
+    <canvas id="outputCanvas" />
 
     <script>
       const imageInput = document.getElementById("imageInput");
       const outputCanvas = document.getElementById("outputCanvas");
       const ctx = outputCanvas.getContext("2d");
-      const colorPicker = document.getElementById("colorPicker");
 
-      let targetColor = { r: 0, g: 0, b: 255 };
+      function rgbToHsv(r, g, b) {
+        (r /= 255), (g /= 255), (b /= 255); // Normaliza os valores de r, g e b para o intervalo [0, 1]
+        const max = Math.max(r, g, b),
+          min = Math.min(r, g, b); // Encontra o valor máximo e mínimo entre r, g e b
+        let h,
+          s,
+          v = max; // Inicializa h (matiz), s (saturação) e v (valor) com o valor máximo
+        const d = max - min; // Calcula a diferença entre o valor máximo e mínimo
+        s = max === 0 ? 0 : d / max; // Calcula a saturação; se max for 0, s é 0, caso contrário, é a diferença dividida pelo máximo
+
+        if (max === min) {
+          h = 0; // Se max e min são iguais, a matiz é 0 (não há cor)
+        } else {
+          switch (
+            max // Determina a matiz com base no valor máximo
+          ) {
+            case r:
+              h = (g - b) / d + (g < b ? 6 : 0);
+              break; // Se vermelho é o máximo
+            case g:
+              h = (b - r) / d + 2;
+              break; // Se verde é o máximo
+            case b:
+              h = (r - g) / d + 4;
+              break; // Se azul é o máximo
+          }
+          h /= 6; // Normaliza a matiz para o intervalo [0, 1]
+        }
+        return [h * 360, s * 100, v * 100]; // Retorna a matiz em graus (0-360), saturação e valor em porcentagem
+      }
 
       function floodFill(x, y, mask, visited, width, height) {
         const stack = [[x, y]];
@@ -24,9 +51,10 @@
 
         while (stack.length > 0) {
           const [cx, cy] = stack.pop();
-          const idx = cy * width + cx;
 
+          const idx = cy * width + cx; // Pesquisar o índice do pixel atual
           if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+
           if (visited[idx] || mask[idx] !== 255) continue;
 
           visited[idx] = true;
@@ -42,68 +70,71 @@
       }
 
       function processImage(file) {
-        const img = new Image();
-        img.onload = () => {
-          outputCanvas.width = img.width;
-          outputCanvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          const imageData = ctx.getImageData(0, 0, img.width, img.height);
-          const { data } = imageData;
+        ctx.drawImage(file, 0, 0);
+        const imageData = ctx.getImageData(0, 0, file.width, file.height);
+        const { data } = imageData;
 
-          const mask = new Uint8Array(imageData.width * imageData.height);
+        const mask = new Uint8Array(imageData.width * imageData.height);
 
-          for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
 
-            // Detect only blue objects, ensure blue is dominant over red and green
-            if (b > r * 1.2 && b > g * 1.2 && b > 100) {
-              mask[Math.floor(i / 4)] = 255;
+          const [h, s, v] = rgbToHsv(r, g, b);
+
+          if ((h < 20 || h > 340) && s > 40 && v > 30) {
+            mask[Math.floor(i / 4)] = 255;
+          }
+        }
+
+        const visited = new Uint8Array(mask.length);
+        const regions = [];
+
+        for (let y = 0; y < file.height; y++) {
+          for (let x = 0; x < file.width; x++) {
+            const idx = y * file.width + x;
+            if (mask[idx] === 255 && !visited[idx]) {
+              const region = floodFill(
+                x,
+                y,
+                mask,
+                visited,
+                file.width,
+                file.height
+              );
+              regions.push(region);
             }
           }
+        }
 
-          const visited = new Uint8Array(mask.length);
-          const regions = [];
+        regions.forEach((region) => {
+          const minX = Math.min(...region.map((pixel) => pixel.x))
+          const maxX = Math.max(...region.map((pixel) => pixel.x))
+          const minY = Math.min(...region.map((pixel) => pixel.y))
+          const maxY = Math.max(...region.map((pixel) => pixel.y))
 
-          for (let y = 0; y < img.height; y++) {
-            for (let x = 0; x < img.width; x++) {
-              const idx = y * img.width + x;
-              if (mask[idx] === 255 && !visited[idx]) {
-                const region = floodFill(x, y, mask, visited, img.width, img.height);
-                regions.push(region);
-              }
-            }
-          }
-
-          regions.forEach((region) => {
-            const minX = Math.min(...region.map((pixel) => pixel.x));
-            const maxX = Math.max(...region.map((pixel) => pixel.x));
-            const minY = Math.min(...region.map((pixel) => pixel.y));
-            const maxY = Math.max(...region.map((pixel) => pixel.y));
-
-            ctx.strokeStyle = "green";
-            ctx.lineWidth = 5;
-            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
-          });
-        };
-        img.src = URL.createObjectURL(file);
+          ctx.strokeRect(minX, minY, maxX - minX, maxY - minY)
+        });
       }
 
       imageInput.addEventListener("change", (event) => {
         const file = event.target.files[0];
-        if (file) {
-          processImage(file);
-        }
-      });
+        const reader = new FileReader();
 
-      colorPicker.addEventListener("input", (event) => {
-        const color = event.target.value;
-        targetColor = {
-          r: parseInt(color.substr(1, 2), 16),
-          g: parseInt(color.substr(3, 2), 16),
-          b: parseInt(color.substr(5, 2), 16),
+        reader.onload = function (event) {
+          const img = new Image();
+          img.onload = (event) => {
+            outputCanvas.width = img.width;
+            outputCanvas.height = img.height;
+
+            ctx.drawImage(img, 0, 0);
+            processImage(img);
+          };
+          img.src = event.target.result;
         };
+
+        reader.readAsDataURL(file);
       });
     </script>
   </body>
